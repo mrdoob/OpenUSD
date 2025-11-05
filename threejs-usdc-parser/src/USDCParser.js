@@ -1303,7 +1303,7 @@ class USDCParser {
     }
 
     /**
-     * Extract material/shader data
+     * Extract material/shader data with shader graph support
      */
     extractMaterial(prim) {
         const material = {
@@ -1312,10 +1312,11 @@ class USDCParser {
             displacement: null,
             volume: null,
             inputs: {},
-            outputs: {}
+            outputs: {},
+            shaders: {} // Store connected shader information
         };
 
-        // Look for shader outputs
+        // Look for shader outputs and inputs
         for (const [key, value] of Object.entries(prim.properties)) {
             if (key.startsWith('outputs:')) {
                 material.outputs[key.replace('outputs:', '')] = value;
@@ -1324,7 +1325,109 @@ class USDCParser {
             }
         }
 
+        // Look for shader connections (via relationships)
+        if (prim.relationships) {
+            for (const [relName, targets] of Object.entries(prim.relationships)) {
+                // Surface shader connection
+                if (relName === 'outputs:surface' || relName === 'surface') {
+                    const target = Array.isArray(targets) ? targets[0] : targets;
+                    material.surface = target;
+                }
+                // Displacement shader connection
+                else if (relName === 'outputs:displacement' || relName === 'displacement') {
+                    const target = Array.isArray(targets) ? targets[0] : targets;
+                    material.displacement = target;
+                }
+                // Volume shader connection
+                else if (relName === 'outputs:volume' || relName === 'volume') {
+                    const target = Array.isArray(targets) ? targets[0] : targets;
+                    material.volume = target;
+                }
+            }
+        }
+
         return material;
+    }
+
+    /**
+     * Resolve shader connections in a shader graph
+     * This traces connections from inputs to their source shaders
+     */
+    resolveShaderConnections(materialPrim, allPrims) {
+        const connections = {};
+
+        // Find the surface shader
+        let surfaceShaderPath = null;
+        if (materialPrim.relationships && materialPrim.relationships['outputs:surface']) {
+            const targets = materialPrim.relationships['outputs:surface'];
+            surfaceShaderPath = Array.isArray(targets) ? targets[0] : targets;
+        }
+
+        if (!surfaceShaderPath) return connections;
+
+        // Find the surface shader prim
+        const surfaceShader = allPrims.find(p => p.path === surfaceShaderPath);
+        if (!surfaceShader) return connections;
+
+        // For each input on the surface shader, check for connections
+        for (const [key, value] of Object.entries(surfaceShader.properties)) {
+            if (key.startsWith('inputs:')) {
+                const inputName = key.replace('inputs:', '');
+
+                // Check if this input is connected (path value points to another shader)
+                if (typeof value === 'string' && value.startsWith('/')) {
+                    // This is a connection to another shader
+                    const connectedShaderPath = value.split('.')[0]; // Extract path without attribute
+                    const connectedShader = allPrims.find(p => p.path === connectedShaderPath);
+
+                    if (connectedShader) {
+                        connections[inputName] = {
+                            shaderPath: connectedShaderPath,
+                            shaderType: connectedShader.properties['info:id'] || 'unknown',
+                            shaderInputs: {}
+                        };
+
+                        // Extract inputs from the connected shader
+                        for (const [shaderKey, shaderValue] of Object.entries(connectedShader.properties)) {
+                            if (shaderKey.startsWith('inputs:')) {
+                                const shaderInputName = shaderKey.replace('inputs:', '');
+                                connections[inputName].shaderInputs[shaderInputName] = shaderValue;
+                            }
+                        }
+                    }
+                } else {
+                    // Direct value
+                    connections[inputName] = { value };
+                }
+            }
+        }
+
+        return connections;
+    }
+
+    /**
+     * Extract texture information from shader connections
+     * Common pattern: Material -> Shader -> UsdUVTexture
+     */
+    extractTextureConnections(materialPrim, allPrims) {
+        const textures = {};
+        const connections = this.resolveShaderConnections(materialPrim, allPrims);
+
+        for (const [inputName, connection] of Object.entries(connections)) {
+            if (connection.shaderType === 'UsdUVTexture' && connection.shaderInputs) {
+                // This is a texture node
+                const texInfo = {
+                    file: connection.shaderInputs.file || null,
+                    wrapS: connection.shaderInputs.wrapS || 'repeat',
+                    wrapT: connection.shaderInputs.wrapT || 'repeat',
+                    st: connection.shaderInputs.st || null, // UV coordinates
+                    fallback: connection.shaderInputs.fallback || [0, 0, 0, 1]
+                };
+                textures[inputName] = texInfo;
+            }
+        }
+
+        return textures;
     }
 }
 

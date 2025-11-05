@@ -164,6 +164,9 @@ class USDZLoader extends THREE.Loader {
      * Build Three.js scene with async texture loading
      */
     async buildThreeSceneAsync(usdData, url) {
+        // Store prims for shader graph access
+        this.lastParsedPrims = usdData.prims;
+
         const group = new THREE.Group();
         group.name = 'USDScene';
 
@@ -683,14 +686,18 @@ class USDZLoader extends THREE.Loader {
     }
 
     /**
-     * Load textures for a material (async)
+     * Load textures for a material (async) with shader graph support
      */
     async loadTexturesForMaterial(material, materialPrim, contextPath) {
         if (!this.textureManager) return;
 
         const materialData = this.parser.extractMaterial(materialPrim);
 
-        // Common USD texture input names
+        // Try to extract texture connections from shader graph
+        const usdData = { prims: this.lastParsedPrims || [] };
+        const textureConnections = this.parser.extractTextureConnections(materialPrim, usdData.prims);
+
+        // Common USD texture input names mapped to Three.js properties
         const textureInputs = {
             'diffuseColor': 'map',          // Base color map
             'normal': 'normalMap',           // Normal map
@@ -703,10 +710,18 @@ class USDZLoader extends THREE.Loader {
         const texturePromises = [];
 
         for (const [usdInput, threeProperty] of Object.entries(textureInputs)) {
-            // Look for texture inputs (might be named differently)
-            const texturePath = materialData.inputs[`${usdInput}:texture`] ||
-                              materialData.inputs[`${usdInput}.texture`] ||
-                              materialData.inputs[usdInput];
+            let texturePath = null;
+
+            // First, try shader graph connections (more correct)
+            if (textureConnections[usdInput] && textureConnections[usdInput].file) {
+                texturePath = textureConnections[usdInput].file;
+            }
+            // Fall back to direct material inputs
+            else {
+                texturePath = materialData.inputs[`${usdInput}:texture`] ||
+                             materialData.inputs[`${usdInput}.texture`] ||
+                             materialData.inputs[usdInput];
+            }
 
             if (texturePath && typeof texturePath === 'string') {
                 const promise = this.textureManager.loadTexture(texturePath, contextPath)
@@ -716,6 +731,14 @@ class USDZLoader extends THREE.Loader {
                             const colorSpace = (usdInput === 'diffuseColor' || usdInput === 'emissiveColor')
                                 ? 'sRGB' : 'linear';
                             this.textureManager.configureTexture(texture, colorSpace);
+
+                            // Apply wrapping modes from shader graph if available
+                            if (textureConnections[usdInput]) {
+                                const wrapS = this.convertWrapMode(textureConnections[usdInput].wrapS);
+                                const wrapT = this.convertWrapMode(textureConnections[usdInput].wrapT);
+                                texture.wrapS = wrapS;
+                                texture.wrapT = wrapT;
+                            }
 
                             // Apply to material
                             material[threeProperty] = texture;
@@ -733,6 +756,22 @@ class USDZLoader extends THREE.Loader {
         }
 
         await Promise.all(texturePromises);
+    }
+
+    /**
+     * Convert USD wrap mode to Three.js wrap mode
+     */
+    convertWrapMode(usdWrapMode) {
+        switch (usdWrapMode) {
+            case 'repeat':
+                return THREE.RepeatWrapping;
+            case 'clamp':
+                return THREE.ClampToEdgeWrapping;
+            case 'mirror':
+                return THREE.MirroredRepeatWrapping;
+            default:
+                return THREE.RepeatWrapping;
+        }
     }
 
     applyTransform(object, transform) {
