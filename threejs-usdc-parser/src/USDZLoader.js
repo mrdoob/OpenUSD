@@ -296,6 +296,11 @@ class USDZLoader extends THREE.Loader {
         // Create material
         const material = this.findAndCreateMaterial(prim, usdData);
 
+        // Enable vertex colors if present
+        if (threeGeometry.attributes.color) {
+            material.vertexColors = true;
+        }
+
         const mesh = new THREE.Mesh(threeGeometry, material);
         mesh.name = this.getNameFromPath(prim.path);
 
@@ -742,6 +747,7 @@ class USDZLoader extends THREE.Loader {
         const positions = [];
         const normals = [];
         const uvs = [];
+        const colors = [];
         const indices = [];
 
         let faceVertexOffset = 0;
@@ -773,6 +779,13 @@ class USDZLoader extends THREE.Loader {
                     this.addVertex(normals, geometry.normals, idx2);
                 }
 
+                // Add vertex colors if available
+                if (geometry.displayColor) {
+                    this.addVertex(colors, geometry.displayColor, idx0);
+                    this.addVertex(colors, geometry.displayColor, idx1);
+                    this.addVertex(colors, geometry.displayColor, idx2);
+                }
+
                 // Add UVs if available
                 if (geometry.uvs) {
                     const uvIdx0 = faceVertexOffset;
@@ -793,6 +806,10 @@ class USDZLoader extends THREE.Loader {
             threeGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
         } else {
             threeGeometry.computeVertexNormals();
+        }
+
+        if (colors.length > 0) {
+            threeGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
         }
 
         if (uvs.length > 0) {

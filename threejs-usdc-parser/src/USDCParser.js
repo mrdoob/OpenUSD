@@ -1195,6 +1195,7 @@ class USDCParser {
             points: null,
             normals: null,
             uvs: null,
+            displayColor: null,
             faceVertexIndices: null,
             faceVertexCounts: null,
             subdivisionScheme: 'none'
@@ -1217,11 +1218,15 @@ class USDCParser {
             geometry.subdivisionScheme = prim.properties.subdivisionScheme;
         }
 
-        // Look for UVs in primvars
-        // UVs are typically stored as primvars:st or primvars:uv
+        // Look for primvars (UVs, colors, etc.)
         for (const [key, value] of Object.entries(prim.properties)) {
+            // UVs are typically stored as primvars:st or primvars:uv
             if (key.includes('primvars:st') || key.includes('primvars:uv')) {
                 geometry.uvs = value;
+            }
+            // Vertex colors are stored as primvars:displayColor
+            if (key.includes('primvars:displayColor')) {
+                geometry.displayColor = value;
             }
         }
 
