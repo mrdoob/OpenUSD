@@ -248,6 +248,10 @@ class USDZLoader extends THREE.Loader {
 
         if (typeName === 'Mesh' || typeName === 'UsdGeomMesh') {
             return this.createMesh(prim, usdData);
+        } else if (typeName === 'Points' || typeName === 'UsdGeomPoints') {
+            return this.createPoints(prim);
+        } else if (typeName === 'BasisCurves' || typeName === 'UsdGeomBasisCurves') {
+            return this.createBasisCurves(prim);
         } else if (typeName === 'Xform' || typeName.includes('Xform')) {
             return this.createXform(prim);
         } else if (typeName.includes('Light')) {
@@ -285,6 +289,175 @@ class USDZLoader extends THREE.Loader {
         this.applyTransform(mesh, transform);
 
         return mesh;
+    }
+
+    createPoints(prim) {
+        // Extract point cloud data
+        const points = prim.properties.points;
+        if (!points || points.length === 0) {
+            console.warn('Points prim has no points data:', prim.path);
+            return null;
+        }
+
+        // Create geometry
+        const geometry = new THREE.BufferGeometry();
+
+        // Set positions
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+
+        // Set normals if available
+        if (prim.properties.normals) {
+            geometry.setAttribute('normal', new THREE.Float32BufferAttribute(prim.properties.normals, 3));
+        }
+
+        // Set colors if available (from primvars:displayColor)
+        for (const [key, value] of Object.entries(prim.properties)) {
+            if (key.includes('primvars:displayColor') || key.includes('primvars:color')) {
+                geometry.setAttribute('color', new THREE.Float32BufferAttribute(value, 3));
+            }
+        }
+
+        // Get point widths (sizes)
+        let size = 1.0;
+        if (prim.properties.widths && prim.properties.widths.length > 0) {
+            // Use average width as point size
+            const avgWidth = prim.properties.widths.reduce((a, b) => a + b, 0) / prim.properties.widths.length;
+            size = avgWidth;
+        }
+
+        // Create material
+        const material = new THREE.PointsMaterial({
+            size: size,
+            vertexColors: geometry.attributes.color !== undefined,
+            color: 0xffffff,
+            sizeAttenuation: true
+        });
+
+        // Create Points object
+        const pointCloud = new THREE.Points(geometry, material);
+        pointCloud.name = this.getNameFromPath(prim.path);
+
+        // Apply transform if present
+        const transform = this.parser.extractTransform(prim);
+        this.applyTransform(pointCloud, transform);
+
+        return pointCloud;
+    }
+
+    createBasisCurves(prim) {
+        // Extract curve data
+        const points = prim.properties.points;
+        const curveVertexCounts = prim.properties.curveVertexCounts;
+
+        if (!points || !curveVertexCounts) {
+            console.warn('BasisCurves prim missing required data:', prim.path);
+            return null;
+        }
+
+        // Get curve parameters
+        const curveType = prim.properties.type || 'cubic'; // 'linear' or 'cubic'
+        const basis = prim.properties.basis || 'bezier'; // 'bezier', 'bspline', 'catmullRom'
+        const wrap = prim.properties.wrap || 'nonperiodic'; // 'nonperiodic', 'periodic', 'pinned'
+
+        // For Three.js, we'll create line segments
+        const geometry = new THREE.BufferGeometry();
+        const positions = [];
+        const colors = [];
+
+        // Get display colors if available
+        const displayColors = prim.properties['primvars:displayColor'];
+
+        let vertexOffset = 0;
+        for (let curveIdx = 0; curveIdx < curveVertexCounts.length; curveIdx++) {
+            const vertexCount = curveVertexCounts[curveIdx];
+
+            // Extract vertices for this curve
+            const curvePoints = [];
+            for (let i = 0; i < vertexCount; i++) {
+                const idx = (vertexOffset + i) * 3;
+                curvePoints.push(
+                    new THREE.Vector3(points[idx], points[idx + 1], points[idx + 2])
+                );
+            }
+
+            // For linear curves, just connect the points
+            // For cubic curves, we'd need to evaluate the basis (simplified here)
+            if (curveType === 'linear') {
+                for (let i = 0; i < curvePoints.length; i++) {
+                    positions.push(curvePoints[i].x, curvePoints[i].y, curvePoints[i].z);
+
+                    // Add color if available
+                    if (displayColors && displayColors.length >= curveIdx * 3 + 3) {
+                        colors.push(
+                            displayColors[curveIdx * 3],
+                            displayColors[curveIdx * 3 + 1],
+                            displayColors[curveIdx * 3 + 2]
+                        );
+                    } else {
+                        colors.push(1, 1, 1);
+                    }
+                }
+            } else {
+                // Cubic curves - simple linear approximation
+                // A proper implementation would evaluate the basis function
+                const segments = Math.max(vertexCount - 1, 1);
+                for (let i = 0; i < segments; i++) {
+                    positions.push(curvePoints[i].x, curvePoints[i].y, curvePoints[i].z);
+
+                    if (displayColors && displayColors.length >= curveIdx * 3 + 3) {
+                        colors.push(
+                            displayColors[curveIdx * 3],
+                            displayColors[curveIdx * 3 + 1],
+                            displayColors[curveIdx * 3 + 2]
+                        );
+                    } else {
+                        colors.push(1, 1, 1);
+                    }
+                }
+                // Add last point
+                const lastIdx = curvePoints.length - 1;
+                positions.push(curvePoints[lastIdx].x, curvePoints[lastIdx].y, curvePoints[lastIdx].z);
+                if (displayColors && displayColors.length >= curveIdx * 3 + 3) {
+                    colors.push(
+                        displayColors[curveIdx * 3],
+                        displayColors[curveIdx * 3 + 1],
+                        displayColors[curveIdx * 3 + 2]
+                    );
+                } else {
+                    colors.push(1, 1, 1);
+                }
+            }
+
+            vertexOffset += vertexCount;
+        }
+
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        if (colors.length > 0) {
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        }
+
+        // Get curve width
+        let lineWidth = 1.0;
+        if (prim.properties.widths && prim.properties.widths.length > 0) {
+            lineWidth = prim.properties.widths[0];
+        }
+
+        // Create material
+        const material = new THREE.LineBasicMaterial({
+            color: 0xffffff,
+            vertexColors: colors.length > 0,
+            linewidth: lineWidth // Note: linewidth is not supported in most WebGL implementations
+        });
+
+        // Create line
+        const curve = new THREE.LineSegments(geometry, material);
+        curve.name = this.getNameFromPath(prim.path);
+
+        // Apply transform if present
+        const transform = this.parser.extractTransform(prim);
+        this.applyTransform(curve, transform);
+
+        return curve;
     }
 
     createXform(prim) {
