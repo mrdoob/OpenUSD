@@ -21,11 +21,15 @@
 
 import * as THREE from 'three';
 import { USDCParser } from './USDCParser.js';
+import { USDZArchive, USDTextureManager } from './USDZArchive.js';
 
 class USDZLoader extends THREE.Loader {
     constructor(manager) {
         super(manager);
         this.parser = new USDCParser();
+        this.textureLoader = new THREE.TextureLoader(manager);
+        this.textureManager = null;
+        this.archive = null;
     }
 
     load(url, onLoad, onProgress, onError) {
@@ -38,9 +42,10 @@ class USDZLoader extends THREE.Loader {
 
         loader.load(
             url,
-            function (arrayBuffer) {
+            async function (arrayBuffer) {
                 try {
-                    onLoad(scope.parse(arrayBuffer, url));
+                    const result = await scope.parseAsync(arrayBuffer, url);
+                    onLoad(result);
                 } catch (e) {
                     if (onError) {
                         onError(e);
@@ -55,7 +60,10 @@ class USDZLoader extends THREE.Loader {
         );
     }
 
-    parse(arrayBuffer, url) {
+    /**
+     * Async parse (for USDZ with texture loading)
+     */
+    async parseAsync(arrayBuffer, url) {
         // Check if this is a USDZ (ZIP) file or a plain USDC file
         const signature = new Uint8Array(arrayBuffer, 0, 4);
         const isZip =
@@ -65,24 +73,63 @@ class USDZLoader extends THREE.Loader {
             signature[3] === 0x04;
 
         if (isZip) {
-            return this.parseUSDZ(arrayBuffer, url);
+            return await this.parseUSDZ(arrayBuffer, url);
         } else {
-            return this.parseUSDC(arrayBuffer, url);
+            return await this.parseUSDC(arrayBuffer, url);
         }
     }
 
-    parseUSDC(arrayBuffer, url) {
-        // Parse USDC file
+    /**
+     * Synchronous parse (kept for backwards compatibility)
+     * Use parseAsync for USDZ with textures
+     */
+    parse(arrayBuffer, url) {
+        // Parse USDC only (sync)
         const usdData = this.parser.parse(arrayBuffer);
-
-        // Convert to Three.js scene
         return this.buildThreeScene(usdData, url);
     }
 
-    parseUSDZ(arrayBuffer, url) {
-        // TODO: Implement USDZ (ZIP) extraction
-        // For now, we'll just handle plain USDC
-        throw new Error('USDZ (ZIP) format not yet implemented. Please use .usdc files.');
+    /**
+     * Parse USDC file (async for texture loading)
+     */
+    async parseUSDC(arrayBuffer, url) {
+        // Setup texture manager for external files
+        this.textureManager = new USDTextureManager(this.textureLoader);
+
+        // Extract base URL for texture paths
+        if (url) {
+            const baseURL = url.substring(0, url.lastIndexOf('/'));
+            this.textureManager.setBaseURL(baseURL);
+        }
+
+        // Parse USDC file
+        const usdData = this.parser.parse(arrayBuffer);
+
+        // Build scene (will load textures async)
+        return await this.buildThreeSceneAsync(usdData, url);
+    }
+
+    /**
+     * Parse USDZ archive (async for extraction and texture loading)
+     */
+    async parseUSDZ(arrayBuffer, url) {
+        console.log('Extracting USDZ archive...');
+
+        // Create archive
+        this.archive = new USDZArchive();
+        await this.archive.extract(arrayBuffer);
+
+        // Setup texture manager with archive
+        this.textureManager = new USDTextureManager(this.textureLoader, this.archive);
+
+        // Get root USD file
+        const rootFileData = this.archive.getRootFile();
+
+        // Parse root file
+        const usdData = this.parser.parse(rootFileData);
+
+        // Build scene with texture loading
+        return await this.buildThreeSceneAsync(usdData, this.archive.rootFile);
     }
 
     buildThreeScene(usdData, url) {
@@ -111,6 +158,71 @@ class USDZLoader extends THREE.Loader {
         }
 
         return group;
+    }
+
+    /**
+     * Build Three.js scene with async texture loading
+     */
+    async buildThreeSceneAsync(usdData, url) {
+        const group = new THREE.Group();
+        group.name = 'USDScene';
+
+        // Build hierarchy
+        const primMap = new Map();
+        const meshesNeedingTextures = [];
+
+        // First pass: create all objects
+        for (const prim of usdData.prims) {
+            const object = this.createObject(prim, usdData);
+            if (object) {
+                primMap.set(prim.path, object);
+
+                // Track meshes that may need textures
+                if (object instanceof THREE.Mesh) {
+                    meshesNeedingTextures.push({ mesh: object, prim });
+                }
+            }
+        }
+
+        // Second pass: build hierarchy based on paths
+        for (const [path, object] of primMap) {
+            const parentPath = this.getParentPath(path);
+            if (parentPath && primMap.has(parentPath)) {
+                primMap.get(parentPath).add(object);
+            } else {
+                group.add(object);
+            }
+        }
+
+        // Third pass: load textures async
+        if (this.textureManager) {
+            await this.loadTexturesForMeshes(meshesNeedingTextures, usdData, url);
+        }
+
+        return group;
+    }
+
+    /**
+     * Load textures for all meshes
+     */
+    async loadTexturesForMeshes(meshesNeedingTextures, usdData, contextPath) {
+        const texturePromises = [];
+
+        for (const { mesh, prim } of meshesNeedingTextures) {
+            // Find material binding
+            const materialBinding = prim.properties['material:binding'];
+            if (!materialBinding) continue;
+
+            // Find material prim
+            const materialPrim = usdData.prims.find(p => p.path === materialBinding);
+            if (!materialPrim) continue;
+
+            // Load textures for this material
+            const promise = this.loadTexturesForMaterial(mesh.material, materialPrim, contextPath);
+            texturePromises.push(promise);
+        }
+
+        await Promise.all(texturePromises);
     }
 
     createObject(prim, usdData) {
@@ -363,10 +475,62 @@ class USDZLoader extends THREE.Loader {
             material.emissive = this.colorArrayToColor(materialData.inputs.emissiveColor);
         }
 
-        // TODO: Load textures
-        // if (materialData.inputs.diffuseTexture) { ... }
+        // Textures will be loaded async via loadTexturesForMaterial()
 
         return material;
+    }
+
+    /**
+     * Load textures for a material (async)
+     */
+    async loadTexturesForMaterial(material, materialPrim, contextPath) {
+        if (!this.textureManager) return;
+
+        const materialData = this.parser.extractMaterial(materialPrim);
+
+        // Common USD texture input names
+        const textureInputs = {
+            'diffuseColor': 'map',          // Base color map
+            'normal': 'normalMap',           // Normal map
+            'metallic': 'metalnessMap',     // Metallic map
+            'roughness': 'roughnessMap',    // Roughness map
+            'occlusion': 'aoMap',           // Ambient occlusion map
+            'emissiveColor': 'emissiveMap', // Emissive map
+        };
+
+        const texturePromises = [];
+
+        for (const [usdInput, threeProperty] of Object.entries(textureInputs)) {
+            // Look for texture inputs (might be named differently)
+            const texturePath = materialData.inputs[`${usdInput}:texture`] ||
+                              materialData.inputs[`${usdInput}.texture`] ||
+                              materialData.inputs[usdInput];
+
+            if (texturePath && typeof texturePath === 'string') {
+                const promise = this.textureManager.loadTexture(texturePath, contextPath)
+                    .then(texture => {
+                        if (texture) {
+                            // Configure texture for USD
+                            const colorSpace = (usdInput === 'diffuseColor' || usdInput === 'emissiveColor')
+                                ? 'sRGB' : 'linear';
+                            this.textureManager.configureTexture(texture, colorSpace);
+
+                            // Apply to material
+                            material[threeProperty] = texture;
+                            material.needsUpdate = true;
+
+                            console.log(`Loaded texture ${usdInput} for material ${material.name}`);
+                        }
+                    })
+                    .catch(err => {
+                        console.warn(`Failed to load texture ${texturePath}:`, err);
+                    });
+
+                texturePromises.push(promise);
+            }
+        }
+
+        await Promise.all(texturePromises);
     }
 
     applyTransform(object, transform) {
