@@ -199,6 +199,12 @@ class USDZLoader extends THREE.Loader {
             await this.loadTexturesForMeshes(meshesNeedingTextures, usdData, url);
         }
 
+        // Fourth pass: build animations
+        const animations = this.buildAnimations(usdData, primMap);
+        if (animations.length > 0) {
+            group.animations = animations;
+        }
+
         return group;
     }
 
@@ -633,6 +639,172 @@ class USDZLoader extends THREE.Loader {
         const parts = path.split('/');
         parts.pop();
         return parts.join('/') || '/';
+    }
+
+    /**
+     * Build Three.js AnimationClips from USD TimeSamples
+     */
+    buildAnimations(usdData, primMap) {
+        const animations = [];
+
+        // Find all prims with animated properties
+        for (const prim of usdData.prims) {
+            const tracks = this.buildTracksForPrim(prim, primMap);
+            if (tracks.length > 0) {
+                // Create an animation clip for this prim
+                const clipName = `${this.getNameFromPath(prim.path)}_animation`;
+                const clip = new THREE.AnimationClip(clipName, -1, tracks);
+                animations.push(clip);
+            }
+        }
+
+        return animations;
+    }
+
+    /**
+     * Build animation tracks for a single prim
+     */
+    buildTracksForPrim(prim, primMap) {
+        const tracks = [];
+        const object = primMap.get(prim.path);
+        if (!object) return tracks;
+
+        // Check all properties for TimeSamples
+        for (const [propName, propValue] of Object.entries(prim.properties)) {
+            if (propValue && typeof propValue === 'object' && propValue.type === 'TimeSamples') {
+                const propTracks = this.buildTracksFromTimeSamples(
+                    object,
+                    propName,
+                    propValue
+                );
+                tracks.push(...propTracks);
+            }
+        }
+
+        return tracks;
+    }
+
+    /**
+     * Build KeyframeTracks from USD TimeSamples
+     */
+    buildTracksFromTimeSamples(object, propName, timeSamples) {
+        const tracks = [];
+        const times = timeSamples.times || [];
+        const values = timeSamples.values || [];
+
+        if (times.length === 0 || values.length === 0) return tracks;
+
+        // Map USD property names to Three.js properties
+        const objectName = object.name || '';
+
+        // Handle transform properties
+        if (propName.includes('xformOp:translate') || propName === 'translation') {
+            // Position animation
+            const flatValues = this.flattenVectorArray(values);
+            const track = new THREE.VectorKeyframeTrack(
+                `${objectName}.position`,
+                times,
+                flatValues
+            );
+            tracks.push(track);
+        } else if (propName.includes('xformOp:rotateXYZ') || propName === 'rotation') {
+            // Rotation animation (euler angles in degrees)
+            const flatValues = this.flattenVectorArray(values, true); // Convert to radians
+            const track = new THREE.VectorKeyframeTrack(
+                `${objectName}.rotation`,
+                times,
+                flatValues
+            );
+            tracks.push(track);
+        } else if (propName.includes('xformOp:rotateX')) {
+            // X rotation
+            const radianValues = values.map(v => THREE.MathUtils.degToRad(v));
+            const track = new THREE.NumberKeyframeTrack(
+                `${objectName}.rotation[x]`,
+                times,
+                radianValues
+            );
+            tracks.push(track);
+        } else if (propName.includes('xformOp:rotateY')) {
+            // Y rotation
+            const radianValues = values.map(v => THREE.MathUtils.degToRad(v));
+            const track = new THREE.NumberKeyframeTrack(
+                `${objectName}.rotation[y]`,
+                times,
+                radianValues
+            );
+            tracks.push(track);
+        } else if (propName.includes('xformOp:rotateZ')) {
+            // Z rotation
+            const radianValues = values.map(v => THREE.MathUtils.degToRad(v));
+            const track = new THREE.NumberKeyframeTrack(
+                `${objectName}.rotation[z]`,
+                times,
+                radianValues
+            );
+            tracks.push(track);
+        } else if (propName.includes('xformOp:scale') || propName === 'scale') {
+            // Scale animation
+            const flatValues = this.flattenVectorArray(values);
+            const track = new THREE.VectorKeyframeTrack(
+                `${objectName}.scale`,
+                times,
+                flatValues
+            );
+            tracks.push(track);
+        } else if (propName.includes('xformOp:orient')) {
+            // Quaternion rotation
+            const flatValues = this.flattenQuaternionArray(values);
+            const track = new THREE.QuaternionKeyframeTrack(
+                `${objectName}.quaternion`,
+                times,
+                flatValues
+            );
+            tracks.push(track);
+        }
+        // Can add more property mappings here (material properties, morph targets, etc.)
+
+        return tracks;
+    }
+
+    /**
+     * Flatten array of vectors for keyframe track
+     */
+    flattenVectorArray(vectors, convertToRadians = false) {
+        const flat = [];
+        for (const vec of vectors) {
+            if (Array.isArray(vec)) {
+                if (convertToRadians) {
+                    // Convert degrees to radians for rotations
+                    flat.push(
+                        THREE.MathUtils.degToRad(vec[0] || 0),
+                        THREE.MathUtils.degToRad(vec[1] || 0),
+                        THREE.MathUtils.degToRad(vec[2] || 0)
+                    );
+                } else {
+                    flat.push(vec[0] || 0, vec[1] || 0, vec[2] || 0);
+                }
+            } else {
+                flat.push(vec, vec, vec);
+            }
+        }
+        return flat;
+    }
+
+    /**
+     * Flatten array of quaternions for keyframe track
+     */
+    flattenQuaternionArray(quaternions) {
+        const flat = [];
+        for (const quat of quaternions) {
+            if (Array.isArray(quat) && quat.length >= 4) {
+                // USD quaternions are [real, i, j, k] = [w, x, y, z]
+                flat.push(quat[1] || 0, quat[2] || 0, quat[3] || 0, quat[0] || 1);
+            } else {
+                flat.push(0, 0, 0, 1); // Identity quaternion
+            }
+        }
+        return flat;
     }
 }
 
