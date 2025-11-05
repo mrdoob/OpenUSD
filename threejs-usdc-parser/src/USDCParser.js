@@ -13,6 +13,35 @@
  * @license Apache-2.0
  */
 
+import { IntegerCompression, SimpleLZ4 } from './IntegerCompression.js';
+
+/**
+ * Half-float (16-bit float) utilities
+ */
+class HalfFloat {
+    static toFloat(half) {
+        const sign = (half & 0x8000) >> 15;
+        const exponent = (half & 0x7C00) >> 10;
+        const fraction = half & 0x03FF;
+
+        if (exponent === 0) {
+            // Denormalized number
+            return (sign ? -1 : 1) * Math.pow(2, -14) * (fraction / 1024);
+        } else if (exponent === 31) {
+            // Infinity or NaN
+            return fraction ? NaN : (sign ? -Infinity : Infinity);
+        }
+
+        // Normalized number
+        return (sign ? -1 : 1) * Math.pow(2, exponent - 15) * (1 + fraction / 1024);
+    }
+
+    static readHalf(view, offset, littleEndian = true) {
+        const bits = view.getUint16(offset, littleEndian);
+        return this.toFloat(bits);
+    }
+}
+
 class USDCParser {
     constructor() {
         this.USDC_IDENT = 'PXR-USDC';
@@ -406,25 +435,130 @@ class USDCParser {
 
         this.seek(section.start);
 
-        // Paths section can be compressed or uncompressed
-        // For now, implement simple uncompressed path reading
+        // Read number of paths
         const numPaths = this.readInt64();
 
-        this.paths = [];
-        for (let i = 0; i < numPaths; i++) {
-            // Simple implementation: read token indices that form path
-            const tokenIndex = this.readUInt32();
-            const hasElement = this.readUInt32();
+        // Initialize paths array with correct size
+        this.paths = new Array(numPaths);
 
-            let path = '';
-            if (hasElement) {
-                path = this.tokens[tokenIndex] || '';
+        // Read compressed data sizes
+        const pathIndexesSize = this.readInt64();
+        const elementTokenIndexesSize = this.readInt64();
+        const jumpsSize = this.readInt64();
+
+        try {
+            // Read compressed path indices
+            const pathIndexesData = this.readBytes(pathIndexesSize);
+            const pathIndexes = IntegerCompression.decompressUInt32(
+                pathIndexesData.buffer.slice(pathIndexesData.byteOffset, pathIndexesData.byteOffset + pathIndexesData.byteLength),
+                numPaths
+            );
+
+            // Read compressed element token indices
+            const elementTokenIndexesData = this.readBytes(elementTokenIndexesSize);
+            const elementTokenIndexes = IntegerCompression.decompressIntegers(
+                elementTokenIndexesData.buffer.slice(elementTokenIndexesData.byteOffset, elementTokenIndexesData.byteOffset + elementTokenIndexesData.byteLength),
+                numPaths,
+                false
+            );
+
+            // Read compressed jumps
+            const jumpsData = this.readBytes(jumpsSize);
+            const jumps = IntegerCompression.decompressIntegers(
+                jumpsData.buffer.slice(jumpsData.byteOffset, jumpsData.byteOffset + jumpsData.byteLength),
+                numPaths,
+                false
+            );
+
+            // Build decompressed paths from the compressed representation
+            this.buildDecompressedPaths(pathIndexes, elementTokenIndexes, jumps, 0, '/');
+
+            console.log(`Read ${this.paths.length} compressed paths`);
+        } catch (e) {
+            console.warn('Failed to read compressed paths, trying simple format:', e);
+            // Fallback to simple reading if compression fails
+            this.readPathsSimple();
+        }
+    }
+
+    /**
+     * Build paths from compressed representation
+     * Algorithm from OpenUSD crateFile.cpp:_BuildDecompressedPathsImpl
+     */
+    buildDecompressedPaths(pathIndexes, elementTokenIndexes, jumps, curIndex, parentPath) {
+        let hasChild = false;
+        let hasSibling = false;
+
+        do {
+            const thisIndex = curIndex++;
+
+            if (thisIndex >= pathIndexes.length) {
+                break;
             }
 
-            this.paths.push(path);
-        }
+            // Build this path
+            if (parentPath === '/') {
+                // Root path
+                this.paths[pathIndexes[thisIndex]] = '/';
+            } else {
+                const tokenIndex = elementTokenIndexes[thisIndex];
+                const isPrimPropertyPath = tokenIndex < 0;
+                const absTokenIndex = Math.abs(tokenIndex);
 
-        console.log(`Read ${this.paths.length} paths`);
+                if (absTokenIndex < this.tokens.length) {
+                    const elemToken = this.tokens[absTokenIndex];
+
+                    // Append to parent path
+                    if (isPrimPropertyPath) {
+                        // Property path (negative token index)
+                        this.paths[pathIndexes[thisIndex]] = `${parentPath}.${elemToken}`;
+                    } else {
+                        // Prim path (positive token index)
+                        this.paths[pathIndexes[thisIndex]] = `${parentPath}/${elemToken}`;
+                    }
+                }
+            }
+
+            // Determine if we have children or siblings
+            const jump = jumps[thisIndex];
+            hasChild = (jump > 0) || (jump === -1);
+            hasSibling = (jump >= 0);
+
+            if (hasChild) {
+                if (hasSibling) {
+                    // Recursively process sibling subtree
+                    const siblingIndex = thisIndex + jump;
+                    if (siblingIndex < pathIndexes.length) {
+                        this.buildDecompressedPaths(
+                            pathIndexes,
+                            elementTokenIndexes,
+                            jumps,
+                            siblingIndex,
+                            parentPath
+                        );
+                    }
+                }
+                // Move to child, update parent path
+                parentPath = this.paths[pathIndexes[thisIndex]];
+            }
+
+        } while (hasChild || hasSibling);
+    }
+
+    /**
+     * Simple uncompressed path reading fallback
+     */
+    readPathsSimple() {
+        const numPaths = this.paths.length;
+        for (let i = 0; i < numPaths; i++) {
+            // Very simple: just read a token index
+            try {
+                const tokenIndex = this.readUInt32();
+                this.paths[i] = this.tokens[tokenIndex] || `/path_${i}`;
+            } catch (e) {
+                this.paths[i] = `/path_${i}`;
+            }
+        }
     }
 
     //=========================================================================
@@ -508,36 +642,105 @@ class USDCParser {
                 return this.readInt64();
             case this.TYPE_ENUM.UInt64:
                 return Number(this.readUInt64());
+            case this.TYPE_ENUM.Half:
+                const half = HalfFloat.readHalf(this.view, this.offset, true);
+                this.offset += 2;
+                return half;
             case this.TYPE_ENUM.Float:
                 return this.readFloat();
             case this.TYPE_ENUM.Double:
                 return this.readDouble();
             case this.TYPE_ENUM.Token:
             case this.TYPE_ENUM.String:
+            case this.TYPE_ENUM.AssetPath:
                 const tokenIndex = this.readUInt32();
                 return this.tokens[tokenIndex] || '';
+
+            // Float vectors
             case this.TYPE_ENUM.Vec2f:
                 return [this.readFloat(), this.readFloat()];
             case this.TYPE_ENUM.Vec3f:
                 return [this.readFloat(), this.readFloat(), this.readFloat()];
             case this.TYPE_ENUM.Vec4f:
                 return [this.readFloat(), this.readFloat(), this.readFloat(), this.readFloat()];
+
+            // Double vectors
             case this.TYPE_ENUM.Vec2d:
                 return [this.readDouble(), this.readDouble()];
             case this.TYPE_ENUM.Vec3d:
                 return [this.readDouble(), this.readDouble(), this.readDouble()];
             case this.TYPE_ENUM.Vec4d:
                 return [this.readDouble(), this.readDouble(), this.readDouble(), this.readDouble()];
-            case this.TYPE_ENUM.Matrix4d:
-                const m = [];
-                for (let i = 0; i < 16; i++) {
-                    m.push(this.readDouble());
+
+            // Half vectors
+            case this.TYPE_ENUM.Vec2h:
+                const vec2h = [
+                    HalfFloat.readHalf(this.view, this.offset, true),
+                    HalfFloat.readHalf(this.view, this.offset + 2, true)
+                ];
+                this.offset += 4;
+                return vec2h;
+            case this.TYPE_ENUM.Vec3h:
+                const vec3h = [
+                    HalfFloat.readHalf(this.view, this.offset, true),
+                    HalfFloat.readHalf(this.view, this.offset + 2, true),
+                    HalfFloat.readHalf(this.view, this.offset + 4, true)
+                ];
+                this.offset += 6;
+                return vec3h;
+            case this.TYPE_ENUM.Vec4h:
+                const vec4h = [
+                    HalfFloat.readHalf(this.view, this.offset, true),
+                    HalfFloat.readHalf(this.view, this.offset + 2, true),
+                    HalfFloat.readHalf(this.view, this.offset + 4, true),
+                    HalfFloat.readHalf(this.view, this.offset + 6, true)
+                ];
+                this.offset += 8;
+                return vec4h;
+
+            // Integer vectors
+            case this.TYPE_ENUM.Vec2i:
+                return [this.readInt32(), this.readInt32()];
+            case this.TYPE_ENUM.Vec3i:
+                return [this.readInt32(), this.readInt32(), this.readInt32()];
+            case this.TYPE_ENUM.Vec4i:
+                return [this.readInt32(), this.readInt32(), this.readInt32(), this.readInt32()];
+
+            // Matrices
+            case this.TYPE_ENUM.Matrix2d:
+                const m2 = [];
+                for (let i = 0; i < 4; i++) {
+                    m2.push(this.readDouble());
                 }
-                return m;
+                return m2;
+            case this.TYPE_ENUM.Matrix3d:
+                const m3 = [];
+                for (let i = 0; i < 9; i++) {
+                    m3.push(this.readDouble());
+                }
+                return m3;
+            case this.TYPE_ENUM.Matrix4d:
+                const m4 = [];
+                for (let i = 0; i < 16; i++) {
+                    m4.push(this.readDouble());
+                }
+                return m4;
+
+            // Quaternions
             case this.TYPE_ENUM.Quatf:
                 return [this.readFloat(), this.readFloat(), this.readFloat(), this.readFloat()];
             case this.TYPE_ENUM.Quatd:
                 return [this.readDouble(), this.readDouble(), this.readDouble(), this.readDouble()];
+            case this.TYPE_ENUM.Quath:
+                const quath = [
+                    HalfFloat.readHalf(this.view, this.offset, true),
+                    HalfFloat.readHalf(this.view, this.offset + 2, true),
+                    HalfFloat.readHalf(this.view, this.offset + 4, true),
+                    HalfFloat.readHalf(this.view, this.offset + 6, true)
+                ];
+                this.offset += 8;
+                return quath;
+
             default:
                 console.warn(`Unsupported value type: ${type}`);
                 return null;
@@ -545,17 +748,64 @@ class USDCParser {
     }
 
     readArrayValue(unpacked) {
-        const { type } = unpacked;
+        const { type, isCompressed } = unpacked;
         const arraySize = this.readInt64();
+
+        // Check if this is a compressed integer array
+        if (isCompressed && (type === this.TYPE_ENUM.Int || type === this.TYPE_ENUM.UInt)) {
+            // Read compressed size
+            const compressedSize = this.readInt64();
+
+            // Read compressed data
+            const compressedData = this.readBytes(compressedSize);
+
+            try {
+                // First try LZ4 decompression (if wrapped in LZ4)
+                // For now, assume it's already the integer-coded format
+                const buffer = compressedData.buffer.slice(
+                    compressedData.byteOffset,
+                    compressedData.byteOffset + compressedData.byteLength
+                );
+
+                // Decompress integers
+                const result = type === this.TYPE_ENUM.UInt
+                    ? IntegerCompression.decompressUInt32(buffer, arraySize)
+                    : IntegerCompression.decompressIntegers(buffer, arraySize, false);
+
+                return Array.from(result);
+            } catch (e) {
+                console.warn('Failed to decompress integer array:', e);
+                // Fall back to reading uncompressed
+            }
+        }
+
+        // Regular array reading
         const array = [];
 
         for (let i = 0; i < arraySize; i++) {
             switch (type) {
+                case this.TYPE_ENUM.Bool:
+                    array.push(Boolean(this.readUInt8()));
+                    break;
+                case this.TYPE_ENUM.UChar:
+                    array.push(this.readUInt8());
+                    break;
                 case this.TYPE_ENUM.Int:
                     array.push(this.readInt32());
                     break;
                 case this.TYPE_ENUM.UInt:
                     array.push(this.readUInt32());
+                    break;
+                case this.TYPE_ENUM.Int64:
+                    array.push(this.readInt64());
+                    break;
+                case this.TYPE_ENUM.UInt64:
+                    array.push(Number(this.readUInt64()));
+                    break;
+                case this.TYPE_ENUM.Half:
+                    const half = HalfFloat.readHalf(this.view, this.offset, true);
+                    this.offset += 2;
+                    array.push(half);
                     break;
                 case this.TYPE_ENUM.Float:
                     array.push(this.readFloat());
@@ -563,17 +813,52 @@ class USDCParser {
                 case this.TYPE_ENUM.Double:
                     array.push(this.readDouble());
                     break;
+
+                // Vectors
                 case this.TYPE_ENUM.Vec2f:
                     array.push([this.readFloat(), this.readFloat()]);
                     break;
                 case this.TYPE_ENUM.Vec3f:
                     array.push([this.readFloat(), this.readFloat(), this.readFloat()]);
                     break;
+                case this.TYPE_ENUM.Vec4f:
+                    array.push([this.readFloat(), this.readFloat(), this.readFloat(), this.readFloat()]);
+                    break;
+                case this.TYPE_ENUM.Vec2d:
+                    array.push([this.readDouble(), this.readDouble()]);
+                    break;
+                case this.TYPE_ENUM.Vec3d:
+                    array.push([this.readDouble(), this.readDouble(), this.readDouble()]);
+                    break;
+                case this.TYPE_ENUM.Vec4d:
+                    array.push([this.readDouble(), this.readDouble(), this.readDouble(), this.readDouble()]);
+                    break;
+                case this.TYPE_ENUM.Vec2i:
+                    array.push([this.readInt32(), this.readInt32()]);
+                    break;
+                case this.TYPE_ENUM.Vec3i:
+                    array.push([this.readInt32(), this.readInt32(), this.readInt32()]);
+                    break;
+                case this.TYPE_ENUM.Vec4i:
+                    array.push([this.readInt32(), this.readInt32(), this.readInt32(), this.readInt32()]);
+                    break;
+
+                // Strings
                 case this.TYPE_ENUM.Token:
                 case this.TYPE_ENUM.String:
+                case this.TYPE_ENUM.AssetPath:
                     const tokenIndex = this.readUInt32();
                     array.push(this.tokens[tokenIndex] || '');
                     break;
+
+                // Quaternions
+                case this.TYPE_ENUM.Quatf:
+                    array.push([this.readFloat(), this.readFloat(), this.readFloat(), this.readFloat()]);
+                    break;
+                case this.TYPE_ENUM.Quatd:
+                    array.push([this.readDouble(), this.readDouble(), this.readDouble(), this.readDouble()]);
+                    break;
+
                 default:
                     console.warn(`Unsupported array type: ${type}`);
                     array.push(null);
