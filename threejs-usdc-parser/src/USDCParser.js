@@ -584,22 +584,34 @@ class USDCParser {
     }
 
     readValue(valueRep) {
-        const unpacked = this.unpackValueRep(valueRep);
+        try {
+            const unpacked = this.unpackValueRep(valueRep);
 
-        if (unpacked.isInlined) {
-            return this.readInlinedValue(unpacked);
+            if (unpacked.isInlined) {
+                return this.readInlinedValue(unpacked);
+            }
+
+            // Value is stored at file offset
+            const savedOffset = this.offset;
+
+            // Validate offset is within file bounds
+            if (unpacked.payload >= this.buffer.byteLength) {
+                console.warn(`Value offset ${unpacked.payload} exceeds file size`);
+                return null;
+            }
+
+            this.seek(unpacked.payload);
+
+            const value = unpacked.isArray
+                ? this.readArrayValue(unpacked)
+                : this.readSingleValue(unpacked);
+
+            this.seek(savedOffset);
+            return value;
+        } catch (e) {
+            console.error('Error reading value:', e);
+            return null;
         }
-
-        // Value is stored at file offset
-        const savedOffset = this.offset;
-        this.seek(unpacked.payload);
-
-        const value = unpacked.isArray
-            ? this.readArrayValue(unpacked)
-            : this.readSingleValue(unpacked);
-
-        this.seek(savedOffset);
-        return value;
     }
 
     readInlinedValue(unpacked) {
@@ -741,10 +753,177 @@ class USDCParser {
                 this.offset += 8;
                 return quath;
 
+            // Complex types
+            case this.TYPE_ENUM.Dictionary:
+                return this.readDictionary();
+
+            case this.TYPE_ENUM.TimeSamples:
+                return this.readTimeSamples();
+
+            case this.TYPE_ENUM.TokenListOp:
+            case this.TYPE_ENUM.StringListOp:
+            case this.TYPE_ENUM.PathListOp:
+            case this.TYPE_ENUM.IntListOp:
+            case this.TYPE_ENUM.Int64ListOp:
+            case this.TYPE_ENUM.UIntListOp:
+            case this.TYPE_ENUM.UInt64ListOp:
+            case this.TYPE_ENUM.ReferenceListOp:
+            case this.TYPE_ENUM.PayloadListOp:
+                return this.readListOp(type);
+
             default:
-                console.warn(`Unsupported value type: ${type}`);
+                console.warn(`Unsupported value type: ${type} (${this.getTypeName(type)})`);
                 return null;
         }
+    }
+
+    /**
+     * Read Dictionary type
+     */
+    readDictionary() {
+        const numEntries = this.readInt64();
+        const dict = {};
+
+        for (let i = 0; i < numEntries; i++) {
+            // Read key (token index)
+            const keyIndex = this.readUInt32();
+            const key = this.tokens[keyIndex] || `key_${i}`;
+
+            // Read value (ValueRep)
+            const valueRep = this.readUInt64();
+            const value = this.readValue(valueRep);
+
+            dict[key] = value;
+        }
+
+        return dict;
+    }
+
+    /**
+     * Read TimeSamples (animation data)
+     */
+    readTimeSamples() {
+        // Read the ValueRep for the samples (may be 0 if in-memory)
+        const valueRep = this.readUInt64();
+
+        // Read time codes
+        const numTimes = this.readInt64();
+        const times = [];
+        for (let i = 0; i < numTimes; i++) {
+            times.push(this.readDouble());
+        }
+
+        // Read values
+        const values = [];
+        if (valueRep === 0n || valueRep === 0) {
+            // Values are in-memory, read them
+            for (let i = 0; i < numTimes; i++) {
+                const valRep = this.readUInt64();
+                values.push(this.readValue(valRep));
+            }
+        } else {
+            // Values are at file offset (stored as valueRep points to them)
+            // For simplicity, try to read them
+            const savedOffset = this.offset;
+            try {
+                for (let i = 0; i < numTimes; i++) {
+                    const valRep = this.readUInt64();
+                    values.push(this.readValue(valRep));
+                }
+            } catch (e) {
+                // If we can't read, just return what we have
+            }
+            this.seek(savedOffset);
+        }
+
+        return {
+            type: 'TimeSamples',
+            times,
+            values
+        };
+    }
+
+    /**
+     * Read ListOp (list edit operations)
+     */
+    readListOp(type) {
+        // ListOps have: explicit, added, prepended, appended, deleted
+        const hasExplicit = Boolean(this.readUInt8());
+        const hasAdded = Boolean(this.readUInt8());
+        const hasPrepended = Boolean(this.readUInt8());
+        const hasAppended = Boolean(this.readUInt8());
+        const hasDeleted = Boolean(this.readUInt8());
+
+        const listOp = {};
+
+        if (hasExplicit) {
+            listOp.explicit = this.readListOpItems(type);
+        }
+        if (hasAdded) {
+            listOp.added = this.readListOpItems(type);
+        }
+        if (hasPrepended) {
+            listOp.prepended = this.readListOpItems(type);
+        }
+        if (hasAppended) {
+            listOp.appended = this.readListOpItems(type);
+        }
+        if (hasDeleted) {
+            listOp.deleted = this.readListOpItems(type);
+        }
+
+        return listOp;
+    }
+
+    /**
+     * Read items for a ListOp
+     */
+    readListOpItems(type) {
+        const numItems = this.readInt64();
+        const items = [];
+
+        for (let i = 0; i < numItems; i++) {
+            switch (type) {
+                case this.TYPE_ENUM.TokenListOp:
+                case this.TYPE_ENUM.StringListOp:
+                    const tokenIndex = this.readUInt32();
+                    items.push(this.tokens[tokenIndex] || '');
+                    break;
+                case this.TYPE_ENUM.PathListOp:
+                    const pathIndex = this.readUInt32();
+                    items.push(this.paths[pathIndex] || '');
+                    break;
+                case this.TYPE_ENUM.IntListOp:
+                    items.push(this.readInt32());
+                    break;
+                case this.TYPE_ENUM.Int64ListOp:
+                    items.push(this.readInt64());
+                    break;
+                case this.TYPE_ENUM.UIntListOp:
+                    items.push(this.readUInt32());
+                    break;
+                case this.TYPE_ENUM.UInt64ListOp:
+                    items.push(Number(this.readUInt64()));
+                    break;
+                default:
+                    // For complex types like Reference/Payload, skip for now
+                    items.push(null);
+            }
+        }
+
+        return items;
+    }
+
+    /**
+     * Get human-readable type name
+     */
+    getTypeName(typeEnum) {
+        for (const [name, value] of Object.entries(this.TYPE_ENUM)) {
+            if (value === typeEnum) {
+                return name;
+            }
+        }
+        return `Unknown(${typeEnum})`;
     }
 
     readArrayValue(unpacked) {
