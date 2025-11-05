@@ -1,0 +1,156 @@
+#usda 1.0
+(
+    defaultPrim = "Scene"
+    upAxis = "Y"
+    metersPerUnit = 1.0
+)
+
+def Xform "Scene"
+{
+    def DistantLight "Sun"
+    {
+        color3f inputs:color = (1.0, 0.95, 0.8)
+        float inputs:intensity = 1.5
+        float inputs:exposure = 0.0
+        double3 xformOp:rotateXYZ = (-45, 45, 0)
+        uniform token[] xformOpOrder = ["xformOp:rotateXYZ"]
+    }
+
+    def SphereLight "PointLight"
+    {
+        color3f inputs:color = (0.8, 0.9, 1.0)
+        float inputs:intensity = 5.0
+        float radius = 0.1
+        double3 xformOp:translate = (3, 4, 2)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Xform "Ground"
+    {
+        def Mesh "GroundPlane"
+        {
+            point3f[] points = [(-5, 0, -5), (5, 0, -5), (5, 0, 5), (-5, 0, 5)]
+            int[] faceVertexIndices = [0, 1, 2, 3]
+            int[] faceVertexCounts = [4]
+            normal3f[] normals = [(0, 1, 0), (0, 1, 0), (0, 1, 0), (0, 1, 0)]
+            texCoord2f[] primvars:st = [(0, 0), (1, 0), (1, 1), (0, 1)] (
+                interpolation = "vertex"
+            )
+            rel material:binding = </Scene/Materials/GroundMaterial>
+        }
+    }
+
+    def Xform "Geometries"
+    {
+        double3 xformOp:translate = (0, 1, 0)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+
+        def Sphere "Sphere1"
+        {
+            double radius = 0.5
+            double3 xformOp:translate = (-2, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </Scene/Materials/RedMaterial>
+        }
+
+        def Cube "Cube1"
+        {
+            double size = 1.0
+            double3 xformOp:translate = (0, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </Scene/Materials/BlueMaterial>
+        }
+
+        def Cylinder "Cylinder1"
+        {
+            double radius = 0.3
+            double height = 1.5
+            double3 xformOp:translate = (2, 0, 0)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </Scene/Materials/GreenMaterial>
+        }
+
+        def Cone "Cone1"
+        {
+            double radius = 0.4
+            double height = 1.2
+            double3 xformOp:translate = (0, 0, 2)
+            uniform token[] xformOpOrder = ["xformOp:translate"]
+            rel material:binding = </Scene/Materials/YellowMaterial>
+        }
+    }
+
+    def Scope "Materials"
+    {
+        def Material "RedMaterial"
+        {
+            token outputs:surface.connect = </Scene/Materials/RedMaterial/PreviewSurface.outputs:surface>
+
+            def Shader "PreviewSurface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.8, 0.1, 0.1)
+                float inputs:metallic = 0.2
+                float inputs:roughness = 0.4
+                token outputs:surface
+            }
+        }
+
+        def Material "BlueMaterial"
+        {
+            token outputs:surface.connect = </Scene/Materials/BlueMaterial/PreviewSurface.outputs:surface>
+
+            def Shader "PreviewSurface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.1, 0.3, 0.9)
+                float inputs:metallic = 0.8
+                float inputs:roughness = 0.2
+                token outputs:surface
+            }
+        }
+
+        def Material "GreenMaterial"
+        {
+            token outputs:surface.connect = </Scene/Materials/GreenMaterial/PreviewSurface.outputs:surface>
+
+            def Shader "PreviewSurface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.1, 0.8, 0.2)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.7
+                token outputs:surface
+            }
+        }
+
+        def Material "YellowMaterial"
+        {
+            token outputs:surface.connect = </Scene/Materials/YellowMaterial/PreviewSurface.outputs:surface>
+
+            def Shader "PreviewSurface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.9, 0.8, 0.1)
+                float inputs:metallic = 0.5
+                float inputs:roughness = 0.3
+                color3f inputs:emissiveColor = (0.2, 0.15, 0.0)
+                token outputs:surface
+            }
+        }
+
+        def Material "GroundMaterial"
+        {
+            token outputs:surface.connect = </Scene/Materials/GroundMaterial/PreviewSurface.outputs:surface>
+
+            def Shader "PreviewSurface"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                color3f inputs:diffuseColor = (0.5, 0.5, 0.5)
+                float inputs:metallic = 0.0
+                float inputs:roughness = 0.9
+                token outputs:surface
+            }
+        }
+    }
+}

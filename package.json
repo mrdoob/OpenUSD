@@ -1,0 +1,40 @@
+{
+  "name": "usd-loader-threejs",
+  "version": "1.0.0",
+  "description": "JavaScript-only USD (Universal Scene Description) loader for Three.js",
+  "main": "USDLoader.js",
+  "type": "module",
+  "scripts": {
+    "serve": "python3 -m http.server 8000",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "usd",
+    "openusd",
+    "three.js",
+    "threejs",
+    "3d",
+    "loader",
+    "usda",
+    "universal-scene-description",
+    "pixar"
+  ],
+  "author": "Claude AI",
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "three": ">=0.150.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mrdoob/OpenUSD"
+  },
+  "files": [
+    "USDLoader.js",
+    "README_USDLoader.md",
+    "examples/"
+  ],
+  "devDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

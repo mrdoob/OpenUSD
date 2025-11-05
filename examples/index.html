@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>USDLoader for Three.js - Example</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 5px;
+            max-width: 300px;
+        }
+
+        #info h1 {
+            margin: 0 0 10px 0;
+            font-size: 18px;
+        }
+
+        #info p {
+            margin: 5px 0;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px 40px;
+            border-radius: 5px;
+            font-size: 18px;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Loading USD Scene...</div>
+
+    <div id="info">
+        <h1>USDLoader for Three.js</h1>
+        <p><strong>Controls:</strong></p>
+        <p>• Left click + drag: Rotate camera</p>
+        <p>• Right click + drag: Pan camera</p>
+        <p>• Scroll: Zoom in/out</p>
+        <p><strong>Scene:</strong></p>
+        <p>• USDA (ASCII) format</p>
+        <p>• PBR materials (UsdPreviewSurface)</p>
+        <p>• Multiple light types</p>
+        <p>• Parametric geometries</p>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { USDLoader } from '../USDLoader.js';
+        import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+        import { RectAreaLightHelper } from 'three/addons/helpers/RectAreaLightHelper.js';
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+        scene.fog = new THREE.Fog(0x1a1a2e, 10, 50);
+
+        // Camera
+        const camera = new THREE.PerspectiveCamera(
+            60,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            1000
+        );
+        camera.position.set(5, 5, 5);
+        camera.lookAt(0, 0, 0);
+
+        // Renderer
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.physicallyCorrectLights = true;
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.0;
+        document.body.appendChild(renderer.domElement);
+
+        // RectAreaLight support
+        RectAreaLightUniformsLib.init();
+
+        // Controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.minDistance = 2;
+        controls.maxDistance = 20;
+        controls.target.set(0, 1, 0);
+        controls.update();
+
+        // Grid helper
+        const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
+        scene.add(gridHelper);
+
+        // Ambient light
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+        scene.add(ambientLight);
+
+        // Load USD scene
+        const loader = new USDLoader();
+        const loadingElement = document.getElementById('loading');
+
+        loader.load(
+            'example_scene.usda',
+            function (usdScene) {
+                console.log('USD Scene loaded:', usdScene);
+
+                // Add the loaded scene
+                scene.add(usdScene.scene);
+
+                // Log materials and metadata
+                console.log('Materials:', usdScene.materials);
+                console.log('Textures:', usdScene.textures);
+                console.log('Metadata:', usdScene.metadata);
+
+                // Enable shadows for all meshes and lights
+                usdScene.scene.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                    if (child.isLight) {
+                        if (child.isDirectionalLight) {
+                            child.castShadow = true;
+                            child.shadow.mapSize.width = 2048;
+                            child.shadow.mapSize.height = 2048;
+                            child.shadow.camera.near = 0.5;
+                            child.shadow.camera.far = 20;
+                            child.shadow.camera.left = -10;
+                            child.shadow.camera.right = 10;
+                            child.shadow.camera.top = 10;
+                            child.shadow.camera.bottom = -10;
+
+                            // Add helper for directional light
+                            const helper = new THREE.DirectionalLightHelper(child, 1);
+                            scene.add(helper);
+                        }
+                        if (child.isPointLight) {
+                            child.castShadow = true;
+                            child.shadow.mapSize.width = 1024;
+                            child.shadow.mapSize.height = 1024;
+
+                            // Add helper for point light
+                            const helper = new THREE.PointLightHelper(child, 0.2);
+                            scene.add(helper);
+                        }
+                        if (child instanceof THREE.RectAreaLight) {
+                            // Add helper for rect area light
+                            const helper = new RectAreaLightHelper(child);
+                            child.add(helper);
+                        }
+                    }
+                });
+
+                // Hide loading message
+                loadingElement.classList.add('hidden');
+            },
+            function (xhr) {
+                const percentComplete = (xhr.loaded / xhr.total * 100).toFixed(0);
+                loadingElement.textContent = `Loading USD Scene... ${percentComplete}%`;
+                console.log(`Loading: ${percentComplete}%`);
+            },
+            function (error) {
+                console.error('Error loading USD scene:', error);
+                loadingElement.textContent = 'Error loading scene. Check console for details.';
+                loadingElement.style.background = 'rgba(128, 0, 0, 0.8)';
+            }
+        );
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Stats display
+        let lastTime = Date.now();
+        let frames = 0;
+
+        setInterval(() => {
+            const now = Date.now();
+            const fps = Math.round((frames * 1000) / (now - lastTime));
+            frames = 0;
+            lastTime = now;
+            // console.log(`FPS: ${fps}`);
+        }, 1000);
+
+        function render() {
+            frames++;
+            requestAnimationFrame(render);
+        }
+        render();
+    </script>
+</body>
+</html>
