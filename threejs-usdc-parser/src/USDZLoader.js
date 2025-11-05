@@ -257,6 +257,16 @@ class USDZLoader extends THREE.Loader {
             return this.createBasisCurves(prim);
         } else if (typeName === 'Camera' || typeName === 'UsdGeomCamera') {
             return this.createCamera(prim);
+        } else if (typeName === 'Cube' || typeName === 'UsdGeomCube') {
+            return this.createCube(prim);
+        } else if (typeName === 'Sphere' || typeName === 'UsdGeomSphere') {
+            return this.createSphere(prim);
+        } else if (typeName === 'Cylinder' || typeName === 'UsdGeomCylinder') {
+            return this.createCylinder(prim);
+        } else if (typeName === 'Cone' || typeName === 'UsdGeomCone') {
+            return this.createCone(prim);
+        } else if (typeName === 'Capsule' || typeName === 'UsdGeomCapsule') {
+            return this.createCapsule(prim);
         } else if (typeName === 'Xform' || typeName.includes('Xform')) {
             return this.createXform(prim);
         } else if (typeName.includes('Light')) {
@@ -516,6 +526,137 @@ class USDZLoader extends THREE.Loader {
         // So no rotation correction is needed
 
         return camera;
+    }
+
+    createCube(prim) {
+        // Extract cube properties
+        const size = prim.properties.size || 2.0;
+
+        // Create box geometry (Three.js BoxGeometry takes width, height, depth)
+        const geometry = new THREE.BoxGeometry(size, size, size);
+        const material = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = this.getNameFromPath(prim.path);
+
+        // Apply transform if present
+        const transform = this.parser.extractTransform(prim);
+        this.applyTransform(mesh, transform);
+
+        return mesh;
+    }
+
+    createSphere(prim) {
+        // Extract sphere properties
+        const radius = prim.properties.radius || 1.0;
+
+        // Create sphere geometry
+        const geometry = new THREE.SphereGeometry(radius, 32, 16);
+        const material = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = this.getNameFromPath(prim.path);
+
+        // Apply transform if present
+        const transform = this.parser.extractTransform(prim);
+        this.applyTransform(mesh, transform);
+
+        return mesh;
+    }
+
+    createCylinder(prim) {
+        // Extract cylinder properties
+        const radius = prim.properties.radius || 1.0;
+        const height = prim.properties.height || 2.0;
+        const axis = prim.properties.axis || 'Z'; // X, Y, or Z
+
+        // Create cylinder geometry (Three.js cylinder is Y-axis by default)
+        const geometry = new THREE.CylinderGeometry(radius, radius, height, 32);
+        const material = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = this.getNameFromPath(prim.path);
+
+        // Rotate cylinder to match USD axis
+        if (axis === 'X') {
+            mesh.rotation.z = Math.PI / 2;
+        } else if (axis === 'Z') {
+            mesh.rotation.x = Math.PI / 2;
+        }
+        // axis === 'Y' is default, no rotation needed
+
+        // Apply transform if present
+        const transform = this.parser.extractTransform(prim);
+        this.applyTransform(mesh, transform);
+
+        return mesh;
+    }
+
+    createCone(prim) {
+        // Extract cone properties
+        const radius = prim.properties.radius || 1.0;
+        const height = prim.properties.height || 2.0;
+        const axis = prim.properties.axis || 'Z'; // X, Y, or Z
+
+        // Create cone geometry (Three.js cone is Y-axis by default)
+        const geometry = new THREE.ConeGeometry(radius, height, 32);
+        const material = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = this.getNameFromPath(prim.path);
+
+        // Rotate cone to match USD axis
+        if (axis === 'X') {
+            mesh.rotation.z = Math.PI / 2;
+        } else if (axis === 'Z') {
+            mesh.rotation.x = Math.PI / 2;
+        }
+        // axis === 'Y' is default, no rotation needed
+
+        // Apply transform if present
+        const transform = this.parser.extractTransform(prim);
+        this.applyTransform(mesh, transform);
+
+        return mesh;
+    }
+
+    createCapsule(prim) {
+        // Extract capsule properties
+        const radius = prim.properties.radius || 1.0;
+        const height = prim.properties.height || 2.0;
+        const axis = prim.properties.axis || 'Z'; // X, Y, or Z
+
+        // Create capsule geometry
+        // A capsule is a cylinder with hemispherical caps
+        // Three.js doesn't have a built-in capsule, so we'll use CapsuleGeometry (added in r140)
+        let geometry;
+        if (THREE.CapsuleGeometry) {
+            // Use built-in CapsuleGeometry if available (Three.js r140+)
+            geometry = new THREE.CapsuleGeometry(radius, height - 2 * radius, 4, 16);
+        } else {
+            // Fallback: approximate with cylinder
+            geometry = new THREE.CylinderGeometry(radius, radius, height, 32);
+        }
+
+        const material = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.name = this.getNameFromPath(prim.path);
+
+        // Rotate capsule to match USD axis
+        // CapsuleGeometry/CylinderGeometry are Y-axis by default
+        if (axis === 'X') {
+            mesh.rotation.z = Math.PI / 2;
+        } else if (axis === 'Z') {
+            mesh.rotation.x = Math.PI / 2;
+        }
+        // axis === 'Y' is default, no rotation needed
+
+        // Apply transform if present
+        const transform = this.parser.extractTransform(prim);
+        this.applyTransform(mesh, transform);
+
+        return mesh;
     }
 
     createXform(prim) {
