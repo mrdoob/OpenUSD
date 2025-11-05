@@ -181,25 +181,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - USDZLoader.js: ~15KB unminified
 - Total: ~43KB (estimated ~12KB gzipped)
 
+## [0.2.0] - 2024-01-XX (Phase 2 Complete)
+
+### Added
+
+#### USDZ Archive Support
+- ZIP archive extraction for .usdz files
+- USDZArchive class for managing archived assets
+- Automatic root file detection (lexicographically first .usdc/.usda)
+- Asset path resolution with relative/absolute handling
+- Data URL conversion for embedded textures
+- USDTextureManager for texture loading and caching
+
+#### Texture Loading
+- Async texture loading from USDZ archives or external URLs
+- Three.js TextureLoader integration
+- Texture caching to avoid duplicate loads
+- Color space handling (sRGB vs linear)
+- Texture wrapping mode support (repeat, clamp, mirror)
+- Blob/DataURL conversion for in-memory textures
+
+#### Relationship Support
+- Proper USD relationship parsing (SdfSpecTypeRelationship)
+- Parse targetPaths field from relationships
+- Material binding via relationships (correct USD semantics)
+- Associate relationships with parent prims
+- Helper methods for path manipulation
+
+#### Animation Support
+- TimeSamples to AnimationClip conversion
+- Position, rotation, scale animations
+- Quaternion rotation support
+- Individual axis rotations (rotateX/Y/Z)
+- Degree to radian conversion for rotations
+- USD to Three.js quaternion reordering
+- AnimationMixer compatible output
+- Multiple animated objects per scene
+
+#### Additional Geometry Types
+- **Points (UsdGeomPoints)** - Point cloud rendering
+  - THREE.Points creation
+  - Width/size support
+  - Vertex colors (primvars:displayColor)
+  - Normal support
+  - PointsMaterial with size attenuation
+- **BasisCurves (UsdGeomBasisCurves)** - Curve rendering
+  - Linear and cubic curve support
+  - Multiple curves per prim
+  - Curve colors (primvars:displayColor)
+  - Line width support
+  - Basis types: bezier, bspline, catmullRom
+  - Wrap modes: nonperiodic, periodic, pinned
+
+#### Shader Graph Support
+- Shader connection traversal
+- Material → Shader → Texture path resolution
+- UsdUVTexture node extraction
+- Shader graph property mapping
+- Connection type detection (direct value vs shader connection)
+- Extract texture file paths from connected nodes
+- Wrap mode extraction from texture nodes
+
+#### Advanced Type Support (from Phase 1 continuation)
+- Half-float (16-bit float) conversion
+- Matrix2d, Matrix3d support
+- Vec2i, Vec3i, Vec4i (integer vectors)
+- Vec2h, Vec3h, Vec4h (half-precision vectors)
+- Dictionary (nested key-value pairs)
+- TimeSamples (animation keyframes)
+- ListOp operations (explicit, added, deleted, ordered)
+
+#### Integer Compression
+- Delta+classification encoding
+- 2-bit codes for common values
+- Support for compressed geometry arrays
+- SimpleLZ4 decompression (basic implementation)
+- IntegerCompression utility class
+
+#### Compressed Paths
+- Full compressed path reconstruction
+- Jump table traversal
+- Hierarchical path building
+- Property path handling (negative token indices)
+
+### Changed
+
+#### USDCParser.js
+- Enhanced extractMaterial() to follow relationship connections
+- Added shader graph traversal methods
+- Prim structure now includes relationships property
+- BuildScene now processes relationship specs
+- Improved error handling with try-catch blocks
+
+#### USDZLoader.js
+- parseAsync() method for async USDZ/texture loading
+- parseUSDZ() for ZIP archive extraction
+- parseUSDC() for standalone USDC with external textures
+- buildThreeSceneAsync() with async texture loading
+- loadTexturesForMaterial() with shader graph support
+- Added animation building in scene construction
+- createPoints() for point cloud geometry
+- createBasisCurves() for curve geometry
+- Store lastParsedPrims for shader graph access
+
+### Fixed
+- Material bindings now use relationships (correct USD spec)
+- Texture paths resolved from shader graphs
+- Animation timing correctly converted to Three.js format
+- Quaternion ordering fixed for Three.js
+
+### Technical Improvements
+- Async/await pattern for texture loading
+- Non-blocking USDZ extraction
+- Proper USD semantics for relationships
+- Shader graph connection resolution
+- Correct color space handling
+
+### Performance
+- Texture caching reduces duplicate loads
+- Path normalization optimized
+- Lazy texture loading only when needed
+
+### Documentation
+- PHASE2_SUMMARY.md with detailed implementation notes
+- Updated README with new features
+- Inline code documentation for new methods
+
 ## [Unreleased]
 
-### Planned Features
-- USDZ (ZIP) archive support with dependency resolution
-- Automatic texture loading
-- Animation timeline support
+### Planned Features (Phase 3)
+- Cameras (UsdGeomCamera)
+- Parametric shapes (Capsule, Cone, Cylinder, Sphere, Cube)
+- Advanced shader graph patterns
+- Error handling & validation improvements
+- Performance optimizations:
+  - Worker thread parsing
+  - Lazy loading
+  - Geometry/material sharing
+- Testing suite:
+  - Unit tests
+  - Integration tests
+  - Visual regression tests
 - Variant selection
 - Reference and payload resolution
 - Skinning and blend shapes
-- Curve primitives
-- Performance optimizations:
-  - Worker thread parsing
-  - Streaming large files
-  - Progressive loading
 - Additional examples:
   - Animation playback
   - Variant switching
   - Material editor
-  - Performance comparison
 
 ### Under Consideration
 - USD ASCII (.usda) format support
