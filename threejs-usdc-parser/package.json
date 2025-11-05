@@ -1,0 +1,36 @@
+{
+  "name": "threejs-usdc-parser",
+  "version": "0.1.0",
+  "description": "Pure JavaScript parser for USDC (USD Crate) files for Three.js",
+  "main": "src/USDCParser.js",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/test-parser.js"
+  },
+  "keywords": [
+    "usd",
+    "usdc",
+    "usdz",
+    "three.js",
+    "threejs",
+    "3d",
+    "parser",
+    "loader",
+    "openusd",
+    "pixar"
+  ],
+  "author": "OpenUSD Contributors",
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "three": ">=0.150.0"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PixarAnimationStudios/OpenUSD"
+  },
+  "bugs": {
+    "url": "https://github.com/PixarAnimationStudios/OpenUSD/issues"
+  },
+  "homepage": "https://github.com/PixarAnimationStudios/OpenUSD/tree/main/threejs-usdc-parser"
+}
