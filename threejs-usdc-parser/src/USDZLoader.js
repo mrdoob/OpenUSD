@@ -255,6 +255,8 @@ class USDZLoader extends THREE.Loader {
             return this.createPoints(prim);
         } else if (typeName === 'BasisCurves' || typeName === 'UsdGeomBasisCurves') {
             return this.createBasisCurves(prim);
+        } else if (typeName === 'Camera' || typeName === 'UsdGeomCamera') {
+            return this.createCamera(prim);
         } else if (typeName === 'Xform' || typeName.includes('Xform')) {
             return this.createXform(prim);
         } else if (typeName.includes('Light')) {
@@ -461,6 +463,59 @@ class USDZLoader extends THREE.Loader {
         this.applyTransform(curve, transform);
 
         return curve;
+    }
+
+    createCamera(prim) {
+        // Extract camera properties
+        const projection = prim.properties.projection || 'perspective';
+        const horizontalAperture = prim.properties.horizontalAperture || 20.955; // ~35mm film
+        const verticalAperture = prim.properties.verticalAperture || 15.2908;
+        const focalLength = prim.properties.focalLength || 50.0;
+        const clippingRange = prim.properties.clippingRange || [0.1, 10000];
+
+        // Calculate aspect ratio
+        const aspect = horizontalAperture / verticalAperture;
+
+        let camera;
+        if (projection === 'orthographic') {
+            // Orthographic camera
+            // Calculate orthographic view size from aperture
+            const viewHeight = verticalAperture / 10; // Convert from tenths of scene unit
+            const viewWidth = horizontalAperture / 10;
+
+            camera = new THREE.OrthographicCamera(
+                -viewWidth / 2,
+                viewWidth / 2,
+                viewHeight / 2,
+                -viewHeight / 2,
+                clippingRange[0],
+                clippingRange[1]
+            );
+        } else {
+            // Perspective camera (default)
+            // Calculate field of view from focal length and aperture
+            // FOV = 2 * atan((aperture / 2) / focalLength)
+            const fov = 2 * Math.atan((verticalAperture / 2) / focalLength) * (180 / Math.PI);
+
+            camera = new THREE.PerspectiveCamera(
+                fov,
+                aspect,
+                clippingRange[0],
+                clippingRange[1]
+            );
+        }
+
+        camera.name = this.getNameFromPath(prim.path);
+
+        // Apply transform if present
+        const transform = this.parser.extractTransform(prim);
+        this.applyTransform(camera, transform);
+
+        // USD cameras look down -Z with Y up (right-handed)
+        // Three.js cameras also look down -Z with Y up (right-handed)
+        // So no rotation correction is needed
+
+        return camera;
     }
 
     createXform(prim) {
