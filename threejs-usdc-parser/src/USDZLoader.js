@@ -209,12 +209,24 @@ class USDZLoader extends THREE.Loader {
         const texturePromises = [];
 
         for (const { mesh, prim } of meshesNeedingTextures) {
-            // Find material binding
-            const materialBinding = prim.properties['material:binding'];
-            if (!materialBinding) continue;
+            // Find material binding (try relationship first, then property for backwards compatibility)
+            let materialPath = null;
+
+            // Check relationships first (correct USD way)
+            if (prim.relationships && prim.relationships['material:binding']) {
+                const targets = prim.relationships['material:binding'];
+                materialPath = Array.isArray(targets) ? targets[0] : targets;
+            }
+
+            // Fall back to property (legacy)
+            if (!materialPath && prim.properties['material:binding']) {
+                materialPath = prim.properties['material:binding'];
+            }
+
+            if (!materialPath) continue;
 
             // Find material prim
-            const materialPrim = usdData.prims.find(p => p.path === materialBinding);
+            const materialPrim = usdData.prims.find(p => p.path === materialPath);
             if (!materialPrim) continue;
 
             // Load textures for this material
@@ -425,12 +437,23 @@ class USDZLoader extends THREE.Loader {
     }
 
     findAndCreateMaterial(prim, usdData) {
-        // Look for material binding in prim properties
-        const materialBinding = prim.properties['material:binding'];
+        // Look for material binding (try relationship first, then property)
+        let materialPath = null;
 
-        if (materialBinding) {
+        // Check relationships first (correct USD way)
+        if (prim.relationships && prim.relationships['material:binding']) {
+            const targets = prim.relationships['material:binding'];
+            materialPath = Array.isArray(targets) ? targets[0] : targets;
+        }
+
+        // Fall back to property (legacy)
+        if (!materialPath && prim.properties['material:binding']) {
+            materialPath = prim.properties['material:binding'];
+        }
+
+        if (materialPath) {
             // Find material prim
-            const materialPrim = usdData.prims.find(p => p.path === materialBinding);
+            const materialPrim = usdData.prims.find(p => p.path === materialPath);
             if (materialPrim) {
                 return this.createMaterial(materialPrim);
             }

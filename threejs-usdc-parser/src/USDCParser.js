@@ -1082,6 +1082,22 @@ class USDCParser {
             }
         }
 
+        // Build relationships and attach to prims
+        for (const spec of this.specs) {
+            if (spec.specType === this.SPEC_TYPE.Relationship) {
+                const relationship = this.buildRelationship(spec);
+                if (relationship) {
+                    // Find parent prim and attach relationship
+                    const parentPath = this.getParentPath(relationship.path);
+                    const parentPrim = scene.prims.find(p => p.path === parentPath);
+                    if (parentPrim) {
+                        const relName = this.getPropertyName(relationship.path);
+                        parentPrim.relationships[relName] = relationship.targetPaths;
+                    }
+                }
+            }
+        }
+
         return scene;
     }
 
@@ -1094,6 +1110,7 @@ class USDCParser {
             type: spec.specType,
             typeName: null,
             properties: {},
+            relationships: {},
             children: []
         };
 
@@ -1113,6 +1130,57 @@ class USDCParser {
         }
 
         return prim;
+    }
+
+    buildRelationship(spec) {
+        const path = this.paths[spec.pathIndex] || '';
+        const fieldSet = this.fieldSets[spec.fieldSetIndex] || [];
+
+        const relationship = {
+            path,
+            targetPaths: []
+        };
+
+        // Read field values
+        for (const fieldIndex of fieldSet) {
+            const field = this.fields[fieldIndex];
+            if (!field) continue;
+
+            const fieldName = field.name;
+            const value = this.readValue(field.valueRep);
+
+            // In USD, relationships have a 'targetPaths' field
+            if (fieldName === 'targetPaths') {
+                // targetPaths can be an array of paths or a single path
+                if (Array.isArray(value)) {
+                    relationship.targetPaths = value;
+                } else if (value) {
+                    relationship.targetPaths = [value];
+                }
+            }
+        }
+
+        return relationship;
+    }
+
+    getParentPath(path) {
+        if (!path || path === '/') return null;
+        const lastSlash = path.lastIndexOf('/');
+        if (lastSlash === 0) return '/';
+        if (lastSlash === -1) return null;
+        return path.substring(0, lastSlash);
+    }
+
+    getPropertyName(path) {
+        if (!path) return '';
+        const lastSlash = path.lastIndexOf('/');
+        if (lastSlash === -1) return path;
+        const propName = path.substring(lastSlash + 1);
+        // Property paths use . separator, e.g., /World/Mesh.material:binding
+        if (propName.includes('.')) {
+            return propName.split('.').pop();
+        }
+        return propName;
     }
 
     //=========================================================================
