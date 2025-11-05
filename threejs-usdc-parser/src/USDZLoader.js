@@ -30,10 +30,36 @@ class USDZLoader extends THREE.Loader {
         this.textureLoader = new THREE.TextureLoader(manager);
         this.textureManager = null;
         this.archive = null;
+        this.verbose = false; // Set to true for detailed logging
+    }
+
+    /**
+     * Enable or disable verbose logging
+     */
+    setVerbose(enabled) {
+        this.verbose = enabled;
+        return this; // For chaining
+    }
+
+    log(...args) {
+        if (this.verbose) {
+            console.log('[USDZLoader]', ...args);
+        }
+    }
+
+    warn(...args) {
+        console.warn('[USDZLoader]', ...args);
+    }
+
+    error(...args) {
+        console.error('[USDZLoader]', ...args);
     }
 
     load(url, onLoad, onProgress, onError) {
         const scope = this;
+
+        scope.log(`Loading USD file: ${url}`);
+
         const loader = new THREE.FileLoader(this.manager);
         loader.setPath(this.path);
         loader.setResponseType('arraybuffer');
@@ -44,9 +70,12 @@ class USDZLoader extends THREE.Loader {
             url,
             async function (arrayBuffer) {
                 try {
+                    scope.log(`File loaded (${arrayBuffer.byteLength} bytes), parsing...`);
                     const result = await scope.parseAsync(arrayBuffer, url);
+                    scope.log(`Parse complete, created scene with ${result.children.length} root objects`);
                     onLoad(result);
                 } catch (e) {
+                    scope.error(`Failed to parse ${url}:`, e.message);
                     if (onError) {
                         onError(e);
                     } else {
@@ -113,23 +142,37 @@ class USDZLoader extends THREE.Loader {
      * Parse USDZ archive (async for extraction and texture loading)
      */
     async parseUSDZ(arrayBuffer, url) {
-        console.log('Extracting USDZ archive...');
+        this.log('Detected USDZ archive, extracting...');
 
-        // Create archive
-        this.archive = new USDZArchive();
-        await this.archive.extract(arrayBuffer);
+        try {
+            // Create archive
+            this.archive = new USDZArchive();
+            await this.archive.extract(arrayBuffer);
 
-        // Setup texture manager with archive
-        this.textureManager = new USDTextureManager(this.textureLoader, this.archive);
+            this.log(`Extracted ${this.archive.files.size} files from archive`);
+            this.log(`Root USD file: ${this.archive.rootFile}`);
 
-        // Get root USD file
-        const rootFileData = this.archive.getRootFile();
+            // Setup texture manager with archive
+            this.textureManager = new USDTextureManager(this.textureLoader, this.archive);
 
-        // Parse root file
-        const usdData = this.parser.parse(rootFileData);
+            // Get root USD file
+            const rootFileData = this.archive.getRootFile();
 
-        // Build scene with texture loading
-        return await this.buildThreeSceneAsync(usdData, this.archive.rootFile);
+            if (!rootFileData) {
+                throw new Error('No root USD file found in USDZ archive');
+            }
+
+            // Parse root file
+            this.log(`Parsing root file (${rootFileData.byteLength} bytes)...`);
+            const usdData = this.parser.parse(rootFileData);
+
+            this.log(`Found ${usdData.prims.length} prims in scene`);
+
+            // Build scene with texture loading
+            return await this.buildThreeSceneAsync(usdData, this.archive.rootFile);
+        } catch (error) {
+            throw new Error(`Failed to parse USDZ archive: ${error.message}`);
+        }
     }
 
     buildThreeScene(usdData, url) {
@@ -736,6 +779,17 @@ class USDZLoader extends THREE.Loader {
 
     convertGeometry(geometry) {
         if (!geometry.points || !geometry.faceVertexIndices || !geometry.faceVertexCounts) {
+            this.warn('Mesh missing required geometry data (points, faceVertexIndices, or faceVertexCounts)');
+            return null;
+        }
+
+        if (geometry.points.length === 0) {
+            this.warn('Mesh has zero vertices');
+            return null;
+        }
+
+        if (geometry.faceVertexCounts.length === 0) {
+            this.warn('Mesh has zero faces');
             return null;
         }
 
