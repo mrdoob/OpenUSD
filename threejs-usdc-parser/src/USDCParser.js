@@ -160,28 +160,46 @@ class USDCParser {
      */
     parse(buffer) {
         this.reset();
+
+        // Validate input
+        if (!buffer || !(buffer instanceof ArrayBuffer)) {
+            throw new Error('Invalid input: expected ArrayBuffer');
+        }
+
+        if (buffer.byteLength < 96) {
+            throw new Error(`File too small to be valid USDC (${buffer.byteLength} bytes). Minimum size is 96 bytes for bootstrap header.`);
+        }
+
         this.buffer = buffer;
         this.view = new DataView(buffer);
         this.offset = 0;
 
-        // Read bootstrap header
-        this.bootstrap = this.readBootstrap();
-        console.log('Bootstrap:', this.bootstrap);
+        try {
+            // Read bootstrap header
+            this.bootstrap = this.readBootstrap();
+            console.log('Bootstrap:', this.bootstrap);
 
-        // Read table of contents
-        this.toc = this.readTableOfContents();
-        console.log('Table of Contents:', this.toc);
+            // Read table of contents
+            this.toc = this.readTableOfContents();
+            console.log('Table of Contents:', this.toc);
 
-        // Read structural sections in order
-        this.readTokens();
-        this.readStrings();
-        this.readFields();
-        this.readFieldSets();
-        this.readSpecs();
-        this.readPaths();
+            // Read structural sections in order
+            this.readTokens();
+            this.readStrings();
+            this.readFields();
+            this.readFieldSets();
+            this.readSpecs();
+            this.readPaths();
 
-        // Build the scene
-        return this.buildScene();
+            // Build the scene
+            return this.buildScene();
+        } catch (error) {
+            // Add context to errors
+            if (error.message && !error.message.includes('USDC')) {
+                throw new Error(`Failed to parse USDC file: ${error.message}`);
+            }
+            throw error;
+        }
     }
 
     //=========================================================================
@@ -243,6 +261,9 @@ class USDCParser {
     }
 
     seek(position) {
+        if (position < 0 || position >= this.buffer.byteLength) {
+            throw new Error(`Seek out of bounds: position ${position} is outside file (size: ${this.buffer.byteLength} bytes)`);
+        }
         this.offset = position;
     }
 
@@ -254,7 +275,7 @@ class USDCParser {
         // Read identifier (8 bytes)
         const ident = this.readString(8);
         if (ident !== this.USDC_IDENT) {
-            throw new Error(`Invalid USDC file identifier: ${ident}`);
+            throw new Error(`Not a valid USDC file. Expected identifier "PXR-USDC", got "${ident}". This may be a USDA (text) file or corrupted data.`);
         }
 
         // Read version (8 bytes: major, minor, patch, reserved)
@@ -263,8 +284,18 @@ class USDCParser {
         const patch = this.readUInt8();
         this.readBytes(5); // reserved bytes
 
+        // Validate version
+        if (major > 0 || minor > 10) {
+            console.warn(`USDC version ${major}.${minor}.${patch} is newer than tested version 0.8.0. Some features may not work correctly.`);
+        }
+
         // Read TOC offset
         const tocOffset = this.readInt64();
+
+        // Validate TOC offset
+        if (tocOffset < 96 || tocOffset >= this.buffer.byteLength) {
+            throw new Error(`Invalid TOC offset: ${tocOffset}. File may be corrupted (file size: ${this.buffer.byteLength} bytes).`);
+        }
 
         // Skip reserved section (8 * int64)
         this.readBytes(64);
@@ -280,6 +311,11 @@ class USDCParser {
         this.seek(this.bootstrap.tocOffset);
 
         const numSections = this.readInt64();
+
+        if (numSections < 0 || numSections > 100) {
+            throw new Error(`Invalid number of sections in TOC: ${numSections}. File may be corrupted.`);
+        }
+
         const sections = {};
 
         for (let i = 0; i < numSections; i++) {
@@ -293,7 +329,23 @@ class USDCParser {
             const start = this.readInt64();
             const size = this.readInt64();
 
+            // Validate section bounds
+            if (start < 0 || start >= this.buffer.byteLength) {
+                console.warn(`Section "${name}" has invalid start offset: ${start}`);
+            }
+            if (size < 0) {
+                console.warn(`Section "${name}" has invalid size: ${size}`);
+            }
+
             sections[name] = { start, size };
+        }
+
+        // Validate required sections
+        const requiredSections = ['tokens', 'strings', 'fields', 'fieldSets', 'specs', 'paths'];
+        for (const reqSection of requiredSections) {
+            if (!sections[reqSection]) {
+                console.warn(`Missing required section: "${reqSection}". File may be incomplete.`);
+            }
         }
 
         return sections;
